@@ -29,8 +29,8 @@ class AltitudeMonitor:
         return None
 
 if __name__ == '__main__':
-    monitor = AltitudeMonitor()
-    print('Starting altitude monitor on /dev/ttyACM0. Ctrl-C to exit.')
+    monitor = AltitudeMonitor(port='/dev/ttyUSB0')
+    print('Starting altitude monitor on /dev/ttyUSB0. Ctrl-C to exit.')
     try:
         while True:
             alt = monitor.get_altitude()
