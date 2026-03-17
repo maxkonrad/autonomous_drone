@@ -6,7 +6,7 @@ import time
 MSP_ALTITUDE = 109  # Important for feedback
 
 class AltitudeMonitor:
-    def __init__(self, port='\/dev\/ttyACM0'):
+    def __init__(self, port='/dev/ttyACM0'):
         # open serial at 115200 baud, short timeout so reads don't block
         self.ser = serial.Serial(port, 115200, timeout=0.1)
 
@@ -22,15 +22,15 @@ class AltitudeMonitor:
             code = ord(self.ser.read(1))
             payload = self.ser.read(size)
             crc = self.ser.read(1)
-            
+
             if code == MSP_ALTITUDE and len(payload) >= 4:
-                alt_cm = struct.unpack('<i', payload[0:4])[0]
+                alt_cm = payload[6]
                 return alt_cm
         return None
 
 if __name__ == '__main__':
-    monitor = AltitudeMonitor(port='/dev/ttyUSB0')
-    print('Starting altitude monitor on /dev/ttyUSB0. Ctrl-C to exit.')
+    monitor = AltitudeMonitor(port='/dev/ttyACM0')
+    print('Starting altitude monitor on /dev/ttyACM0. Ctrl-C to exit.')
     try:
         while True:
             alt = monitor.get_altitude()

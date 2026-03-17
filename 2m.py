@@ -11,7 +11,7 @@ MSP_ALTITUDE     = 109  # Important for feedback
 MSP_SET_RAW_RC   = 200
 
 class AutonomousDrone:
-    def __init__(self, port='/dev/ttyS0'):
+    def __init__(self, port='/dev/ttyACM0'):
         self.ser = serial.Serial(port, 115200, timeout=0.1)
         self.rc = [1500, 1500, 1500, 1000, 1000, 1000, 1000, 1000] # R, P, Y, T, AUX1-4
 
