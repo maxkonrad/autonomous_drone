@@ -6,7 +6,7 @@ import time
 MSP_SET_RAW_RC = 200
 
 # Macros
-SECONDS = 1  # Duration for motor test in seconds
+SECONDS = 10  # Duration for motor test in seconds
 
 class MotorTest:
     def __init__(self, port='/dev/ttyAMA0'):  # Adjust port as needed for your setup
