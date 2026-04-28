@@ -88,6 +88,43 @@ RC_LOW  = 1000
 RC_MID  = 1500
 RC_HIGH = 2000
 
+# Arming prevention flags (from runtime_config.h — bit positions start at 6)
+# Used to decode arming_flags from MSP_STATUS_EX into human-readable names.
+ARMING_FLAG_NAMES = {
+    (1 <<  6): 'GEOZONE',
+    (1 <<  7): 'FAILSAFE_SYSTEM',
+    (1 <<  8): 'NOT_LEVEL',
+    (1 <<  9): 'SENSORS_CALIBRATING',
+    (1 << 10): 'SYSTEM_OVERLOADED',
+    (1 << 11): 'NAVIGATION_UNSAFE',
+    (1 << 12): 'COMPASS_NOT_CALIBRATED',
+    (1 << 13): 'ACCELEROMETER_NOT_CALIBRATED',
+    (1 << 14): 'ARM_SWITCH',
+    (1 << 15): 'HARDWARE_FAILURE',
+    (1 << 16): 'BOXFAILSAFE',
+    (1 << 18): 'RC_LINK',
+    (1 << 19): 'THROTTLE',
+    (1 << 20): 'CLI',
+    (1 << 21): 'CMS_MENU',
+    (1 << 22): 'OSD_MENU',
+    (1 << 23): 'ROLLPITCH_NOT_CENTERED',
+    (1 << 24): 'SERVO_AUTOTRIM',
+    (1 << 25): 'OOM',
+    (1 << 26): 'INVALID_SETTING',
+    (1 << 27): 'PWM_OUTPUT_ERROR',
+    (1 << 28): 'NO_PREARM',
+    (1 << 29): 'DSHOT_BEEPER',
+    (1 << 30): 'LANDING_DETECTED',
+}
+
+def decode_arming_flags(flags):
+    """Return list of human-readable arming prevention flag names."""
+    active = []
+    for bit, name in ARMING_FLAG_NAMES.items():
+        if flags & bit:
+            active.append(name)
+    return active
+
 # Channel indices (0-based)
 CH_ROLL     = 0
 CH_PITCH    = 1
@@ -172,21 +209,33 @@ class MSP:
         return None
 
     def get_status(self):
-        """Read MSP_STATUS_EX — returns sensor flags, arming state, etc."""
+        """Read MSP_STATUS_EX — returns sensor flags, arming state, etc.
+
+        Note on boxModeFlags (bytes 6-9):
+        In iNAV v9, this is a packed bitmask where bit positions map to
+        the activeBoxIds[] array order, NOT permanent box IDs. BOXARM is
+        always the first entry added (initActiveBoxIds line 191), so
+        bit 0 = ARMED. This holds for all iNAV builds.
+
+        Note on armingFlags (bytes 13-14):
+        Written as uint16_t, but the actual variable is uint32_t.
+        Flags above bit 15 (BOXFAILSAFE, RC_LINK, THROTTLE, etc.)
+        are truncated in MSP_STATUS_EX.
+        """
         r = self.send(MSP_STATUS_EX)
         if not r or r['error'] or len(r['data']) < 15:
             return None
         d = r['data']
-        sensors = struct.unpack('<H', bytes(d[4:6]))[0]
-        flags   = struct.unpack('<I', bytes(d[6:10]))[0]
-        arming  = struct.unpack('<H', bytes(d[13:15]))[0]
+        sensors   = struct.unpack('<H', bytes(d[4:6]))[0]
+        box_flags = struct.unpack('<I', bytes(d[6:10]))[0]
+        arming    = struct.unpack('<H', bytes(d[13:15]))[0]
         return {
             'cycle_time':  struct.unpack('<H', bytes(d[0:2]))[0],
             'i2c_errors':  struct.unpack('<H', bytes(d[2:4]))[0],
             'sensors':     sensors,
-            'flags':       flags,
+            'box_flags':   box_flags,
             'arming_flags': arming,
-            'armed':       bool(flags & 1),
+            'armed':       bool(box_flags & 1),  # BOXARM = bit 0 (always first in activeBoxIds)
             'has_acc':     bool(sensors & (1 << 0)),
             'has_baro':    bool(sensors & (1 << 1)),
             'has_mag':     bool(sensors & (1 << 2)),
@@ -273,15 +322,25 @@ class MSP:
         """Configure a mode activation range slot.
         aux_ch: 0=AUX1, 1=AUX2 ...
         steps : 0=900, 32=1700, 48=2100  (step × 25 + 900)
+
+        NOT: Bu fonksiyon devre dışı bırakıldı.
+        Mode range ayarları iNAV Configurator'dan yapılacak.
         """
-        payload = struct.pack('<BBBBB', idx, perm_id, aux_ch, step_start, step_end)
-        return self.send(MSP_SET_MODE_RANGE, list(payload))
+        #payload = struct.pack('<BBBBB', idx, perm_id, aux_ch, step_start, step_end)
+        #return self.send(MSP_SET_MODE_RANGE, list(payload))
+        pass
 
     def save_eeprom(self):
-        return self.send(MSP_EEPROM_WRITE)
+        # NOT: EEPROM yazma devre dışı bırakıldı.
+        # Bu ayar iNAV Configurator'dan yapılacak.
+        #return self.send(MSP_EEPROM_WRITE)
+        pass
 
     def reboot(self):
-        return self.send(MSP_REBOOT)
+        # NOT: Reboot devre dışı bırakıldı.
+        # FC reboot işlemi iNAV Configurator'dan yapılacak.
+        #return self.send(MSP_REBOOT)
+        pass
 
     def set_motors(self, m1, m2, m3, m4):
         """Direct motor output (bypasses PID — use only for ground tests!)."""
@@ -352,9 +411,11 @@ class PIDController:
 
         # ── I term (with anti-windup clamp) ────────────────────
         self._integral += error * dt
-        self._integral = max(-self.i_limit / self.ki if self.ki else 0,
-                             min(self.i_limit / self.ki if self.ki else 0,
-                                 self._integral))
+        if self.ki != 0:
+            i_limit_val = self.i_limit / self.ki
+            self._integral = max(-i_limit_val, min(i_limit_val, self._integral))
+        else:
+            self._integral = 0
         i_term = self.ki * self._integral
 
         # ── D term ─────────────────────────────────────────────
@@ -437,8 +498,12 @@ class DroneController:
             return True
 
         af = status.get('arming_flags', 0) if status else 0
+        reasons = decode_arming_flags(af)
         print(f"❌ Arming FAILED — arming_flags=0x{af:04X}")
-        print("   Run 'status' in iNAV CLI to see arming prevention flags.")
+        if reasons:
+            print(f"   Blockers: {', '.join(reasons)}")
+        else:
+            print("   Run 'status' in iNAV CLI to see arming prevention flags.")
         return False
 
     def _disarm_now(self):
@@ -446,6 +511,7 @@ class DroneController:
         self.rc[CH_AUX1] = RC_LOW
         self.rc[CH_AUX2] = RC_LOW
         self.rc[CH_AUX3] = RC_LOW
+        self.rc[CH_AUX4] = RC_LOW
         self.rc[CH_THROTTLE] = RC_LOW
         for _ in range(40):
             self._tx()
@@ -536,35 +602,62 @@ class DroneController:
     # ── Mode configuration ─────────────────────────────────────
 
     def configure_modes(self, include_wp=False):
-        """Program mode ranges into FC via MSP and save to EEPROM."""
-        print("⚙️  Configuring mode ranges ...")
-        # Activation range: AUX high (1700–2100) → steps 32–48
-        H_START, H_END = 32, 48
+        """Program mode ranges into FC via MSP, save to EEPROM, and reboot.
 
-        # Slot 0: ARM on AUX1
-        self.msp.set_mode_range(0, PERM_ARM, 0, H_START, H_END)
-        print("   [0] ARM           → AUX1 [1700–2100]")
+        NOT: Bu fonksiyon devre dışı bırakıldı.
+        Mode range, EEPROM ve reboot işlemleri iNAV Configurator'dan yapılacak.
+        """
+        print("⚙️  Mode yapılandırması atlandı — iNAV Configurator'dan yapılacak.")
+        # A reboot is required because iNAV caches which navigation modes
+        # are configured at boot (via updateUsedModeActivationConditionFlags).
+        # Without a reboot, clearing GPS nav slots has no effect on the
+        # ARMING_DISABLED_NAVIGATION_UNSAFE check.
 
-        # Slot 1: ANGLE on AUX2
-        self.msp.set_mode_range(1, PERM_ANGLE, 1, H_START, H_END)
-        print("   [1] ANGLE         → AUX2 [1700–2100]")
-
-        # Slot 2: NAV ALTHOLD on AUX2 (stacked with ANGLE)
-        self.msp.set_mode_range(2, PERM_NAV_ALTHOLD, 1, H_START, H_END)
-        print("   [2] NAV ALTHOLD   → AUX2 [1700–2100]")
-
-        if include_wp:
-            # Slot 3: NAV POSHOLD on AUX3
-            self.msp.set_mode_range(3, PERM_NAV_POSHOLD, 2, H_START, H_END)
-            print("   [3] NAV POSHOLD   → AUX3 [1700–2100]")
-            # Slot 4: NAV WP on AUX4
-            self.msp.set_mode_range(4, PERM_NAV_WP, 3, H_START, H_END)
-            print("   [4] NAV WP        → AUX4 [1700–2100]")
-
-        time.sleep(0.2)
-        self.msp.save_eeprom()
-        print("✅ Saved to EEPROM.\n")
-        time.sleep(1)
+        # # Activation range: AUX high (1700–2100) → steps 32–48
+        # H_START, H_END = 32, 48
+        #
+        # # Slot 0: ARM on AUX1
+        # self.msp.set_mode_range(0, PERM_ARM, 0, H_START, H_END)
+        # print("   [0] ARM           → AUX1 [1700–2100]")
+        #
+        # # Slot 1: ANGLE on AUX2
+        # self.msp.set_mode_range(1, PERM_ANGLE, 1, H_START, H_END)
+        # print("   [1] ANGLE         → AUX2 [1700–2100]")
+        #
+        # # Slot 2: NAV ALTHOLD on AUX2 (stacked with ANGLE)
+        # self.msp.set_mode_range(2, PERM_NAV_ALTHOLD, 1, H_START, H_END)
+        # print("   [2] NAV ALTHOLD   → AUX2 [1700–2100]")
+        #
+        # if include_wp:
+        #     # Slot 3: NAV POSHOLD on AUX3
+        #     self.msp.set_mode_range(3, PERM_NAV_POSHOLD, 2, H_START, H_END)
+        #     print("   [3] NAV POSHOLD   → AUX3 [1700–2100]")
+        #     # Slot 4: NAV WP on AUX4
+        #     self.msp.set_mode_range(4, PERM_NAV_WP, 3, H_START, H_END)
+        #     print("   [4] NAV WP        → AUX4 [1700–2100]")
+        # else:
+        #     # Clear GPS-dependent mode slots so leftover EEPROM config
+        #     # from a previous waypoint run doesn't block arming without GPS.
+        #     # step_start == step_end (0,0) → iNAV treats the slot as disabled.
+        #     self.msp.set_mode_range(3, PERM_NAV_POSHOLD, 2, 0, 0)
+        #     self.msp.set_mode_range(4, PERM_NAV_WP, 3, 0, 0)
+        #     print("   [3–4] Cleared GPS nav slots (not needed for RC Override)")
+        #
+        # time.sleep(0.2)
+        # self.msp.save_eeprom()
+        # print("✅ Saved to EEPROM.")
+        # time.sleep(1)
+        #
+        # # Reboot FC so it re-evaluates which nav modes are configured.
+        # # Without this, isUsingNavigationModes() still returns True from
+        # # cached boot-time state, causing NAVIGATION_UNSAFE arming block.
+        # print("🔄 Rebooting FC to apply mode changes ...")
+        # self.msp.reboot()
+        # self.msp.close()
+        # time.sleep(5)
+        # print("🔌 Reconnecting ...")
+        # self.msp = MSP(SERIAL_PORT, BAUD_RATE)
+        # print("✅ FC rebooted and reconnected.\n")
 
 
 # ╔══════════════════════════════════════════════════════════════╗
@@ -863,21 +956,22 @@ def print_setup_instructions():
 ║                                                              ║
 ║  Before first use, configure the FC via iNAV Configurator:   ║
 ║                                                              ║
-║  OPTION 1 — Set receiver type to MSP (simplest):            ║
-║    • Configurator → Receiver tab → Receiver Type → MSP      ║
-║    • Save & Reboot                                           ║
+║  1. Receiver Type:                                           ║
+║    • Configurator → Receiver tab → Receiver Type → MSP       ║
+║    • Or CLI → set msp_override_channels = 255 (if using TX)  ║
 ║                                                              ║
-║  OPTION 2 — Use MSP RC Override (if using a real TX too):    ║
-║    • CLI → set msp_override_channels = 255                   ║
-║    • CLI → save                                              ║
-║    • Modes tab → assign MSP RC OVERRIDE to a switch          ║
+║  2. Set Mode Ranges (Modes Tab):                             ║
+║    You MUST manually configure these for the script to work: ║
+║    • ARM          → Add Range → AUX 1 [1700 - 2100]          ║
+║    • ANGLE        → Add Range → AUX 2 [1700 - 2100]          ║
+║    • NAV ALTHOLD  → Add Range → AUX 2 [1700 - 2100]          ║
+║    • NAV WP       → Add Range → AUX 4 [1700 - 2100] (for WP) ║
 ║                                                              ║
-║  The script will auto-configure ARM, ANGLE, and ALTHOLD      ║
-║  mode ranges via MSP and save to EEPROM on startup.          ║
+║  WARNING: If you do NOT have a GPS module, do NOT add        ║
+║  NAV POSHOLD or NAV WP. Otherwise, you will get a            ║
+║  NAVIGATION_UNSAFE error and the drone will not arm!         ║
 ║                                                              ║
-║  For Waypoint mode, a GPS module must be connected and       ║
-║  have a valid fix (≥6 satellites).                           ║
-║                                                              ║
+║  After setting these, Save and Reboot your flight controller.║
 ╚══════════════════════════════════════════════════════════════╝
 """)
 
@@ -895,7 +989,7 @@ def main():
     print("""
 ╔══════════════════════════════════════════════════════════════╗
 ║          AUTONOMOUS DRONE CONTROLLER  v1.0                   ║
-║          iNAV 8.x  •  MSP Protocol  •  Raspberry Pi         ║
+║          iNAV 9.x  •  MSP Protocol  •  Raspberry Pi         ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  Takeoff → 2m altitude → Hold 20s → Land                    ║
 ║  Press Ctrl+C at ANY time for emergency stop                 ║
@@ -937,26 +1031,8 @@ def main():
             print("❌ Pre-flight checks failed. Fix issues and retry.")
             return
 
-        # ── Configure modes on FC ──────────────────────────────
-        print("Do you want the script to auto-configure mode ranges on the FC?")
-        print("  [Y] Yes — write ARM/ANGLE/ALTHOLD to EEPROM (safe if no existing modes)")
-        print("  [N] No  — I already configured modes manually\n")
-        conf = input("➜ Configure modes? (Y/N): ").strip().upper()
-        if conf == 'Y':
-            drone.configure_modes(include_wp=use_wp)
-            print("⚠️  If this is the first time, you may need to reboot the FC.")
-            reboot = input("➜ Reboot FC now? (Y/N): ").strip().upper()
-            if reboot == 'Y':
-                print("🔄 Rebooting FC ...")
-                msp.reboot()
-                msp.close()
-                time.sleep(5)
-                print("🔌 Reconnecting ...")
-                msp = MSP(SERIAL_PORT, BAUD_RATE)
-                drone = DroneController(msp)
-                if not drone.preflight(need_gps=use_wp):
-                    print("❌ Post-reboot checks failed.")
-                    return
+        # ── Setup completed manually ───────────────────────────
+        # Mode range, EEPROM, and Reboot are handled manually via iNAV Configurator.
 
         # ── Safety countdown ───────────────────────────────────
         print("\n🔴 REMOVE HANDS FROM THE DRONE!")
