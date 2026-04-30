@@ -481,29 +481,22 @@ class DroneController:
 
     # ── Arming ─────────────────────────────────────────────────
 
-    def arm(self):
-        """Arm the FC via AUX1 high."""
-        print("⚡ Arming ...")
-        self.rc[CH_THROTTLE] = RC_LOW
+    def wait_for_arm(self):
+        """Wait for the user to manually arm the FC via remote."""
+        print("⏳ Waiting for you to ARM the drone using your remote switch (clicker)...")
+        # Ensure our internal RC state keeps AUX1 high once armed,
+        # in case we are overriding it.
         self.rc[CH_AUX1] = RC_HIGH
-        self._tx_for(2.0)
-        time.sleep(0.3)
-
-        status = self.msp.get_status()
-        if status and status['armed']:
-            self.armed = True
-            alt, _ = self.msp.get_altitude()
-            self.start_alt = alt if alt is not None else 0
-            print(f"✅ Armed!  Reference altitude = {self.start_alt} cm")
-            return True
-
-        af = status.get('arming_flags', 0) if status else 0
-        reasons = decode_arming_flags(af)
-        print(f"❌ Arming FAILED — arming_flags=0x{af:04X}")
-        if reasons:
-            print(f"   Blockers: {', '.join(reasons)}")
-        else:
-            print("   Run 'status' in iNAV CLI to see arming prevention flags.")
+        
+        while not self.abort:
+            status = self.msp.get_status()
+            if status and status['armed']:
+                self.armed = True
+                alt, _ = self.msp.get_altitude()
+                self.start_alt = alt if alt is not None else 0
+                print(f"✅ Armed detected! Reference altitude = {self.start_alt} cm")
+                return True
+            time.sleep(0.5)
         return False
 
     def _disarm_now(self):
@@ -563,7 +556,7 @@ class DroneController:
         if need_gps and not st['has_gps']:
             print("❌ GPS required for waypoint mode!"); return False
         if st['armed']:
-            print("⚠️  Already armed — disarm first."); return False
+            print("⚠️  Drone is already armed! Proceeding.")
 
         alt, vario = self.msp.get_altitude()
         if alt is not None:
@@ -684,8 +677,8 @@ class RCOverrideFlight:
         print("═" * 52 + "\n")
 
         try:
-            # 1 — Arm
-            if not self.d.arm():
+            # 1 — Wait for manual arm
+            if not self.d.wait_for_arm():
                 return False
             time.sleep(0.5)
 
@@ -865,8 +858,8 @@ class WaypointFlight:
             )
             print("   WP2: RTH + LAND")
 
-            # 3 — Arm
-            if not self.d.arm():
+            # 3 — Wait for manual arm
+            if not self.d.wait_for_arm():
                 return False
             time.sleep(0.5)
 
@@ -989,7 +982,7 @@ def main():
     print("""
 ╔══════════════════════════════════════════════════════════════╗
 ║          AUTONOMOUS DRONE CONTROLLER  v1.0                   ║
-║          iNAV 9.x  •  MSP Protocol  •  Raspberry Pi         ║
+║          iNAV 8.x  •  MSP Protocol  •  Raspberry Pi         ║
 ╠══════════════════════════════════════════════════════════════╣
 ║  Takeoff → 2m altitude → Hold 20s → Land                    ║
 ║  Press Ctrl+C at ANY time for emergency stop                 ║
