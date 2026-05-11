@@ -29,14 +29,14 @@ def main():
         time.sleep(0.5)
 
         # 1. Takeoff Phase
-        print("\n🚀 TAKEOFF — Throttle 1550 for 2 seconds...")
+        print("\n🚀 TAKEOFF — Throttle 1185 for 1 second...")
         flight_log = []
         start_time = time.time()
         
-        drone.rc[CH_THROTTLE] = 1550
+        drone.rc[CH_THROTTLE] = 1185
         interval = 1.0 / RC_LOOP_HZ
         
-        end_time = time.time() + 2.0
+        end_time = time.time() + 1.0
         while time.time() < end_time and not drone.abort:
             drone._tx()
             
@@ -54,36 +54,19 @@ def main():
             sys.stdout.flush()
             time.sleep(interval)
 
-        # 2. Wait/Hover Phase
-        print("\n\n⏸️ WAIT — Throttle 1500 for 3 seconds...")
-        drone.rc[CH_THROTTLE] = 1500
-        end_time = time.time() + 3.0
-        while time.time() < end_time and not drone.abort:
-            drone._tx()
-            
-            alt, _ = drone.msp.get_altitude()
-            alt = alt if alt is not None else 0
-            rel_alt = alt - drone.start_alt
-            
-            flight_log.append({
-                "time": time.time() - start_time,
-                "altitude": rel_alt,
-                "target": target,
-                "error": target - rel_alt
-            })
-            sys.stdout.write(f"\r   Hover Alt: {rel_alt:5d} cm    ")
-            sys.stdout.flush()
-            time.sleep(interval)
-
-        # 3. Landing Phase
-        print("\n\n🛬 LANDING — Throttle 1450 until ground detected...")
-        drone.rc[CH_THROTTLE] = 1450
+        # 2. Landing Phase
+        print("\n\n🛬 LANDING — Gradually decreasing throttle...")
+        current_throttle = 1185.0
+        drone.rc[CH_THROTTLE] = int(current_throttle)
         
         land_start = time.time()
         recent_alts = [] # To track if we stopped descending
         baseline_acc_z = None
         
         while not drone.abort:
+            # Gradually decrease throttle by 30 units per second
+            current_throttle = max(1000.0, current_throttle - (30.0 / RC_LOOP_HZ))
+            drone.rc[CH_THROTTLE] = int(current_throttle)
             drone._tx()
             
             alt, _ = drone.msp.get_altitude()
