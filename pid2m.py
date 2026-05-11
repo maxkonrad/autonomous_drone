@@ -24,6 +24,7 @@ import struct
 import time
 import sys
 import signal
+import json
 
 # ╔══════════════════════════════════════════════════════════════╗
 # ║                     CONFIGURATION                           ║
@@ -61,6 +62,7 @@ MSP_FC_VERSION      = 3
 MSP_MODE_RANGES     = 34
 MSP_SET_MODE_RANGE  = 35
 MSP_STATUS          = 101
+MSP_RAW_IMU         = 102
 MSP_RAW_GPS         = 106
 MSP_ATTITUDE        = 108
 MSP_ALTITUDE        = 109
@@ -260,6 +262,21 @@ class MSP:
             yaw   = struct.unpack('<h', bytes(r['data'][4:6]))[0]
             return roll, pitch, yaw
         return None, None, None
+
+    def get_imu(self):
+        """Raw IMU data (accelerometer, gyro, magnetometer)."""
+        r = self.send(MSP_RAW_IMU)
+        if r and not r['error'] and len(r['data']) >= 18:
+            d = r['data']
+            acc_x, acc_y, acc_z = struct.unpack('<hhh', bytes(d[0:6]))
+            gyr_x, gyr_y, gyr_z = struct.unpack('<hhh', bytes(d[6:12]))
+            mag_x, mag_y, mag_z = struct.unpack('<hhh', bytes(d[12:18]))
+            return {
+                'acc_x': acc_x, 'acc_y': acc_y, 'acc_z': acc_z,
+                'gyr_x': gyr_x, 'gyr_y': gyr_y, 'gyr_z': gyr_z,
+                'mag_x': mag_x, 'mag_y': mag_y, 'mag_z': mag_z
+            }
+        return None
 
     def get_analog(self):
         """Battery voltage, current draw, etc."""
@@ -668,6 +685,8 @@ class RCOverrideFlight:
         self.d = drone
         self.interval = 1.0 / RC_LOOP_HZ
         self.pid = PIDController()
+        self.flight_log = []
+        self.start_time = None
 
     def run(self):
         print("\n" + "═" * 52)
@@ -687,6 +706,7 @@ class RCOverrideFlight:
             self.d.rc[CH_AUX2] = RC_HIGH      # ANGLE + ALTHOLD on
             self.d.rc[CH_THROTTLE] = HOVER_THROTTLE
             self.d._tx_for(0.5)
+            self.start_time = time.time()
 
             # 3 — Climb (PID targets TARGET_ALTITUDE_CM)
             self.pid.reset()
@@ -713,6 +733,14 @@ class RCOverrideFlight:
             print(f"\n❌ Error: {e}")
             self.d.disarm()
             return False
+        finally:
+            if self.flight_log:
+                try:
+                    with open("altitude_data.json", "w") as f:
+                        json.dump(self.flight_log, f, indent=2)
+                    print(f"\n💾 Flight data saved to altitude_data.json ({len(self.flight_log)} records)")
+                except Exception as ex:
+                    print(f"\n❌ Failed to save flight log: {ex}")
 
     # ── PID-driven climb ──────────────────────────────────────
 
@@ -731,6 +759,13 @@ class RCOverrideFlight:
             throttle = self.pid.update(error, vario)
             self.d.rc[CH_THROTTLE] = throttle
             self.d._tx()
+            
+            self.flight_log.append({
+                "time": time.time() - self.start_time,
+                "altitude": alt,
+                "target": TARGET_ALTITUDE_CM,
+                "error": error
+            })
 
             sys.stdout.write(
                 f"\r   Alt: {alt:5d} cm | Vario: {vario:+4d} cm/s | "
@@ -758,6 +793,13 @@ class RCOverrideFlight:
             throttle = self.pid.update(error, vario)
             self.d.rc[CH_THROTTLE] = throttle
             self.d._tx()
+            
+            self.flight_log.append({
+                "time": time.time() - self.start_time,
+                "altitude": alt,
+                "target": TARGET_ALTITUDE_CM,
+                "error": error
+            })
 
             remaining = HOLD_DURATION_SEC - (time.time() - t0)
             sys.stdout.write(
@@ -791,6 +833,13 @@ class RCOverrideFlight:
             throttle = self.pid.update(error, vario)
             self.d.rc[CH_THROTTLE] = throttle
             self.d._tx()
+            
+            self.flight_log.append({
+                "time": time.time() - self.start_time,
+                "altitude": alt,
+                "target": target,
+                "error": error
+            })
 
             sys.stdout.write(
                 f"\r   Alt: {alt:5d} cm | Target: {target:5.0f} | "
