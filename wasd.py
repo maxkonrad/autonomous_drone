@@ -172,6 +172,9 @@ def main():
 
     print("⚠️  Ensure the drone is ARMED if you want motors to spin.\n")
 
+    # Set CH7 (index 6) to 2000 to force NAV ALTHOLD when MSP Override is active
+    drone.rc[6] = 2000
+
     interval = 1.0 / RC_LOOP_HZ
 
     try:
